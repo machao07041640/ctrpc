@@ -41,10 +41,10 @@ ctrpc:
 ctrpc:
   rpc:
     dependencies:
-      user-service:                          # 服务名
-        address: static://localhost:9091     # 目标地址
+      user-service:
+        address: static://localhost:9091
         timeout: 3s
-        interfaces:                          # 接口全路径
+        interfaces:
           - com.ctrpc.iface.user.UserIface
 ```
 
@@ -53,11 +53,11 @@ ctrpc:
 ```java
 public class OrderRpcService implements OrderIface {
 
-    @RpcReference   # 也可写 @RpcReference(service = "user-service")
+    @RpcReference // 也可写 @RpcReference(service = "user-service")
     private UserIface userIface;
 
     public OrderDTO createOrder(CreateOrderRequest req) {
-        userIface.getUser(req.getUserId());  // 像本地方法一样调用
+        userIface.getUser(req.getUserId());
         // ...
     }
 }
@@ -75,4 +75,22 @@ public class OrderRpcService implements OrderIface {
 
 ## 序列化
 
-RPC 参数与返回值使用 **Fastjson2**（`com.alibaba.fastjson2`）做 JSON 编解码，支持泛型返回类型（如 `List<UserDTO>`）。
+RPC 参数与返回值默认使用 **Fastjson2** 做 JSON 编解码，支持泛型返回类型（如 `List<UserDTO>`）。核心依赖 `RpcCodec` 抽象；应用可以提供自己的 `RpcCodec` Bean，而无需修改传输和调用层。
+
+## Server business executor
+
+RPC 业务方法运行在独立的有界线程池中，而不是 gRPC transport executor。默认核心线程 16、最大线程 64、队列 1000；线程池满时拒绝新任务，避免在 transport 线程上执行耗时业务。
+
+```yaml
+ctrpc:
+  rpc:
+    server:
+      executor-core-threads: 16
+      executor-max-threads: 64
+      executor-queue-capacity: 1000
+      executor-keep-alive-seconds: 60
+```
+
+## Transport errors
+
+业务错误仍通过 `RpcException` 返回；gRPC transport 层错误通过 `RpcTransportException` 暴露，并保留原始 `Status.Code`（例如 `DEADLINE_EXCEEDED`、`UNAVAILABLE`、`CANCELLED`）。这样网络/超时错误不会被错误地当成业务 500，也为后续重试策略保留了判断依据。
