@@ -1,0 +1,18 @@
+# 消费端依赖配置模板 —— 复制到 application.yml
+
+ctrpc:
+  rpc:
+    server:
+      port: 9092
+    dependencies:
+      # 服务名
+      user-service:
+        address: static://localhost:9091
+        timeout: 3s
+        # 需要引用的接口全路径
+        interfaces:
+          - com.ctrpc.iface.user.UserIface
+      # payment-service:
+      #   address: static://localhost:9093
+      #   interfaces:
+      #     - com.ctrpc.iface.payment.PaymentIface

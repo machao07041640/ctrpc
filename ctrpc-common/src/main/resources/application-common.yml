@@ -1,0 +1,50 @@
+# 公共默认配置（各服务 application.yml 可覆盖）
+
+ctrpc:
+  datasource:
+    maximum-pool-size: 50
+    minimum-idle: 10
+    connection-timeout: 5s
+    idle-timeout: 10m
+    max-lifetime: 30m
+  redis:
+    max-active: 64
+    max-idle: 32
+    min-idle: 8
+    max-wait-millis: 3000
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+  data:
+    redis:
+      lettuce:
+        pool:
+          max-active: ${ctrpc.redis.max-active}
+          max-idle: ${ctrpc.redis.max-idle}
+          min-idle: ${ctrpc.redis.min-idle}
+          max-wait: ${ctrpc.redis.max-wait-millis}ms
+  datasource:
+    hikari:
+      maximum-pool-size: ${ctrpc.datasource.maximum-pool-size}
+      minimum-idle: ${ctrpc.datasource.minimum-idle}
+      connection-timeout: ${ctrpc.datasource.connection-timeout}
+      idle-timeout: ${ctrpc.datasource.idle-timeout}
+      max-lifetime: ${ctrpc.datasource.max-lifetime}
+      pool-name: ctrpc-hikari
+
+logging:
+  json:
+    enabled: false
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0

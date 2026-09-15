@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: user-service
+  config:
+    import: classpath:application-common.yml
+  datasource:
+    url: jdbc:mysql://localhost:3306/ctrpc_user?useUnicode=true&characterEncoding=utf8&serverTimezone=UTC&useSSL=false&allowPublicKeyRetrieval=true
+    username: ctrpc
+    password: ctrpc123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      lettuce:
+        pool:
+          enabled: true
+
+server:
+  port: 8081
+
+# CTRPC：本服务作为 Provider，只需配置监听端口
+ctrpc:
+  rpc:
+    server:
+      port: 9091
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  file:
+    path: logs

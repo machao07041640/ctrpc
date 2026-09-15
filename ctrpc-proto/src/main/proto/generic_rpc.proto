@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+option java_multiple_files = true;
+option java_package = "com.ctrpc.proto.invoke";
+option java_outer_classname = "GenericRpcProto";
+
+package ctrpc.invoke;
+
+/**
+ * 通用 RPC 调用通道。业务接口通过注解暴露，底层统一走此 gRPC 服务。
+ */
+service CtrpcInvoker {
+  rpc Invoke(InvokeRequest) returns (InvokeResponse);
+}
+
+message InvokeRequest {
+  // 接口全限定名，如 com.ctrpc.iface.user.UserIface
+  string interface_name = 1;
+  // 方法名
+  string method_name = 2;
+  // 参数类型全限定名，逗号分隔（无参为空）
+  string parameter_types = 3;
+  // 参数 JSON 数组，如 [1,"abc"]
+  string args_json = 4;
+  // 链路追踪
+  string trace_id = 5;
+}
+
+message InvokeResponse {
+  // 0=成功
+  int32 code = 1;
+  string message = 2;
+  // 返回值 JSON；void 时为空
+  string data_json = 3;
+}
