@@ -12,40 +12,72 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.util.StringUtils;
 
-/** 通用 gRPC Invoker：根据 interface + method 分发到本地 @RpcService 实现。 */
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+
+/** 通用 gRPC Invoker：将 RPC 请求投递到独立有界业务线程池，再分发到本地 @RpcService 实现。 */
 public class GenericRpcInvoker extends CtrpcInvokerGrpc.CtrpcInvokerImplBase {
     private static final Logger log = LoggerFactory.getLogger(GenericRpcInvoker.class);
     private final RpcServiceRegistry registry;
     private final RpcCodec serializer;
-    public GenericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer) {
+    private final Executor businessExecutor;
+
+    public GenericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer, Executor businessExecutor) {
         this.registry = registry;
         this.serializer = serializer;
+        this.businessExecutor = businessExecutor;
     }
+
     @Override
     public void invoke(InvokeRequest request, StreamObserver<InvokeResponse> responseObserver) {
-        long start = System.currentTimeMillis();
-        String traceId = request.getTraceId();
-        if (traceId != null && !StringUtils.isEmpty(traceId)) MDC.put("traceId", traceId);
-        MDC.put("rpcIface", request.getInterfaceName());
-        MDC.put("rpcMethod", request.getMethodName());
+        final String traceId = request.getTraceId();
+        final String rpcIface = request.getInterfaceName();
+        final String rpcMethod = request.getMethodName();
+
         try {
-            RpcMethodHandler handler = registry.lookup(request.getInterfaceName(), request.getMethodName(), request.getParameterTypes());
+            businessExecutor.execute(() -> invokeOnBusinessThread(request, responseObserver, traceId, rpcIface, rpcMethod));
+        } catch (RejectedExecutionException e) {
+            log.warn("RPC business executor saturated iface={} method={}", rpcIface, rpcMethod);
+            responseObserver.onError(Status.RESOURCE_EXHAUSTED
+                    .withDescription("RPC business executor is saturated")
+                    .asRuntimeException());
+        }
+    }
+
+    private void invokeOnBusinessThread(InvokeRequest request,
+                                        StreamObserver<InvokeResponse> responseObserver,
+                                        String traceId,
+                                        String rpcIface,
+                                        String rpcMethod) {
+        long start = System.currentTimeMillis();
+        if (traceId != null && !StringUtils.isEmpty(traceId)) MDC.put("traceId", traceId);
+        MDC.put("rpcIface", rpcIface);
+        MDC.put("rpcMethod", rpcMethod);
+        try {
+            RpcMethodHandler handler = registry.lookup(rpcIface, rpcMethod, request.getParameterTypes());
             Object[] args = serializer.decodeArgs(request.getArgsJson(), handler.getParameterTypes());
             Object result = handler.invoke(args);
             responseObserver.onNext(InvokeResponse.newBuilder().setCode(0).setMessage("OK")
                     .setDataJson(serializer.encodeResult(result)).build());
             responseObserver.onCompleted();
-            log.info("RPC invoke ok iface={} method={} elapsedMs={}", request.getInterfaceName(), request.getMethodName(), System.currentTimeMillis() - start);
+            log.info("RPC invoke ok iface={} method={} elapsedMs={}", rpcIface, rpcMethod,
+                    System.currentTimeMillis() - start);
         } catch (RpcException e) {
-            log.warn("RPC invoke business error iface={} method={} code={} msg={}", request.getInterfaceName(), request.getMethodName(), e.getCode(), e.getMessage());
+            log.warn("RPC invoke business error iface={} method={} code={} msg={}", rpcIface, rpcMethod,
+                    e.getCode(), e.getMessage());
             responseObserver.onNext(InvokeResponse.newBuilder().setCode(e.getCode()).setMessage(e.getMessage()).build());
             responseObserver.onCompleted();
         } catch (Exception e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            log.error("RPC invoke failed iface={} method={}", request.getInterfaceName(), request.getMethodName(), cause);
-            responseObserver.onError(Status.INTERNAL.withDescription("RPC invocation failed").withCause(cause).asRuntimeException());
+            log.error("RPC invoke failed iface={} method={}", rpcIface, rpcMethod, cause);
+            responseObserver.onError(Status.INTERNAL
+                    .withDescription("RPC invocation failed")
+                    .withCause(cause)
+                    .asRuntimeException());
         } finally {
-            MDC.clear();
+            MDC.remove("traceId");
+            MDC.remove("rpcIface");
+            MDC.remove("rpcMethod");
         }
     }
 }
