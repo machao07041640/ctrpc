@@ -3,6 +3,10 @@ package com.ctrpc.rpc.config;
 import com.ctrpc.rpc.client.RpcChannelManager;
 import com.ctrpc.rpc.client.RpcReferenceBeanPostProcessor;
 import com.ctrpc.rpc.serialize.Fastjson2RpcCodec;
+import com.ctrpc.rpc.registry.ServiceRegistry;
+import com.ctrpc.rpc.registry.StaticServiceRegistry;
+import com.ctrpc.rpc.loadbalance.LoadBalancer;
+import com.ctrpc.rpc.loadbalance.RoundRobinLoadBalancer;
 import com.ctrpc.rpc.serialize.RpcCodec;
 import com.ctrpc.rpc.server.GenericRpcInvoker;
 import com.ctrpc.rpc.server.RpcServerBootstrap;
@@ -67,6 +71,14 @@ public class RpcAutoConfiguration {
 
     @Bean
     public RpcChannelManager rpcChannelManager(RpcProperties properties) { return new RpcChannelManager(properties); }
+
+    @Bean
+    @ConditionalOnMissingBean(ServiceRegistry.class)
+    public ServiceRegistry serviceRegistry(RpcProperties properties) { return new StaticServiceRegistry(properties); }
+
+    @Bean
+    @ConditionalOnMissingBean(LoadBalancer.class)
+    public LoadBalancer loadBalancer() { return new RoundRobinLoadBalancer(); }
 
     @Bean
     public static RpcReferenceBeanPostProcessor rpcReferenceBeanPostProcessor(

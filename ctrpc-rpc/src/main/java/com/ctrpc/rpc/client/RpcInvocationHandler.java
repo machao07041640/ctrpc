@@ -8,6 +8,10 @@ import com.ctrpc.rpc.exception.RpcException;
 import com.ctrpc.rpc.exception.RpcTransportException;
 import com.ctrpc.rpc.serialize.Fastjson2RpcCodec;
 import com.ctrpc.rpc.serialize.RpcCodec;
+import com.ctrpc.rpc.registry.ServiceRegistry;
+import com.ctrpc.rpc.loadbalance.LoadBalancer;
+import com.ctrpc.rpc.governance.RetryExecutor;
+import com.ctrpc.rpc.governance.CircuitBreaker;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import org.slf4j.Logger;
@@ -29,15 +33,25 @@ public class RpcInvocationHandler implements InvocationHandler {
     private final RpcChannelManager channelManager;
     private final RpcCodec serializer;
     private final RpcProperties properties;
+    private final ServiceRegistry registry;
+    private final LoadBalancer loadBalancer;
+    private final CircuitBreaker circuitBreaker = new CircuitBreaker();
 
     public RpcInvocationHandler(String serviceName, Class<?> interfaceClass, long timeoutMs,
-                                RpcChannelManager channelManager, RpcCodec serializer, RpcProperties properties) {
+                                RpcChannelManager channelManager, RpcCodec serializer, RpcProperties properties, ServiceRegistry registry, LoadBalancer loadBalancer) {
         this.serviceName = serviceName;
         this.interfaceClass = interfaceClass;
         this.timeoutMs = timeoutMs;
         this.channelManager = channelManager;
         this.serializer = serializer;
         this.properties = properties;
+        this.registry = registry;
+        this.loadBalancer = loadBalancer;
+    }
+
+    public RpcInvocationHandler(String serviceName, Class<?> interfaceClass, long timeoutMs,
+                                RpcChannelManager channelManager, RpcCodec serializer, RpcProperties properties) {
+        this(serviceName, interfaceClass, timeoutMs, channelManager, serializer, properties, null, null);
     }
 
     @Override
@@ -70,10 +84,15 @@ public class RpcInvocationHandler implements InvocationHandler {
                     .setTraceId(traceId)
                     .build();
 
+            String targetService = serviceName;
+            if (registry != null && loadBalancer != null) {
+                targetService = loadBalancer.select(registry.discover(serviceName)).getAddress();
+            }
             CtrpcInvokerGrpc.CtrpcInvokerBlockingStub stub =
-                    CtrpcInvokerGrpc.newBlockingStub(channelManager.getChannel(serviceName))
+                    CtrpcInvokerGrpc.newBlockingStub(channelManager.getChannel(targetService))
                             .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS);
-            InvokeResponse response = stub.invoke(request);
+            InvokeResponse response = circuitBreaker.execute(() ->
+                    RetryExecutor.execute(() -> stub.invoke(request), 2));
             if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
             Object result = serializer.decodeResult(response.getDataJson(), method);
             log.info("RPC client ok service={} iface={} method={} elapsedMs={}",
