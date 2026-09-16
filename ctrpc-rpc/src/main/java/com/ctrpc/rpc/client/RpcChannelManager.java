@@ -3,11 +3,14 @@ package com.ctrpc.rpc.client;
 import com.ctrpc.rpc.config.RpcProperties;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.util.StringUtils;
 
+import java.io.File;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -44,9 +47,21 @@ public class RpcChannelManager {
     }
 
     private ManagedChannel createChannel(String serviceName, String target) {
-        ManagedChannelBuilder<?> builder = ManagedChannelBuilder.forTarget(target)
-                .usePlaintext()
-                .maxInboundMessageSize(properties.getClient().getMaxInboundMessageSize());
+        ManagedChannelBuilder<?> builder;
+        if (properties.getClient().isTlsEnabled()) {
+            try {
+                NettyChannelBuilder nettyBuilder = NettyChannelBuilder.forTarget(target)
+                        .sslContext(buildClientSslContext())
+                        .maxInboundMessageSize(properties.getClient().getMaxInboundMessageSize());
+                builder = nettyBuilder;
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to configure RPC TLS for service: " + serviceName, e);
+            }
+        } else {
+            builder = ManagedChannelBuilder.forTarget(target)
+                    .usePlaintext()
+                    .maxInboundMessageSize(properties.getClient().getMaxInboundMessageSize());
+        }
 
         if (properties.getClient().isKeepAlive()) {
             builder.keepAliveTime(properties.getClient().getKeepAliveTime().getSeconds(), TimeUnit.SECONDS)
@@ -55,8 +70,20 @@ public class RpcChannelManager {
         }
 
         ManagedChannel channel = builder.build();
-        log.info("RPC channel created: service={} target={}", serviceName, target);
+        log.info("RPC channel created: service={} target={} tls={}", serviceName, target, properties.getClient().isTlsEnabled());
         return channel;
+    }
+
+    private io.grpc.netty.shaded.io.netty.handler.ssl.SslContext buildClientSslContext() throws Exception {
+        io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts.ClientSslContextBuilder builder = GrpcSslContexts.forClient();
+        RpcProperties.Client client = properties.getClient();
+        if (StringUtils.hasText(client.getTlsTrustCertCollectionFile())) {
+            builder.trustManager(new File(client.getTlsTrustCertCollectionFile()));
+        }
+        if (StringUtils.hasText(client.getTlsClientCertChainFile()) && StringUtils.hasText(client.getTlsClientPrivateKeyFile())) {
+            builder.keyManager(new File(client.getTlsClientCertChainFile()), new File(client.getTlsClientPrivateKeyFile()));
+        }
+        return builder.build();
     }
 
     /** 支持 static://host:port、dns:///host:port 或 host:port。 */
@@ -75,7 +102,10 @@ public class RpcChannelManager {
     public void shutdown() {
         channels.forEach((name, channel) -> {
             try {
-                channel.shutdown().awaitTermination(3, TimeUnit.SECONDS);
+                channel.shutdown();
+                if (!channel.awaitTermination(3, TimeUnit.SECONDS)) {
+                    channel.shutdownNow();
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 channel.shutdownNow();
