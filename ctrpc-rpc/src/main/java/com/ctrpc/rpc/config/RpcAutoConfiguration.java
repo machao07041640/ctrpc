@@ -2,6 +2,7 @@ package com.ctrpc.rpc.config;
 
 import com.ctrpc.rpc.client.RpcChannelManager;
 import com.ctrpc.rpc.client.RpcReferenceBeanPostProcessor;
+import com.ctrpc.rpc.metrics.RpcMetrics;
 import com.ctrpc.rpc.serialize.Fastjson2RpcCodec;
 import com.ctrpc.rpc.registry.ServiceRegistry;
 import com.ctrpc.rpc.registry.StaticServiceRegistry;
@@ -11,6 +12,8 @@ import com.ctrpc.rpc.serialize.RpcCodec;
 import com.ctrpc.rpc.server.GenericRpcInvoker;
 import com.ctrpc.rpc.server.RpcServerBootstrap;
 import com.ctrpc.rpc.server.RpcServiceRegistry;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -40,10 +43,6 @@ public class RpcAutoConfiguration {
     @Bean
     public static RpcServiceRegistry rpcServiceRegistry() { return new RpcServiceRegistry(); }
 
-    /**
-     * Dedicated bounded executor for RPC business work. gRPC transport callbacks
-     * remain on gRPC-managed threads and never run user service methods directly.
-     */
     @Bean(destroyMethod = "shutdown")
     public ExecutorService rpcBusinessExecutor(RpcProperties properties) {
         RpcProperties.Server cfg = properties.getServer();
@@ -60,8 +59,12 @@ public class RpcAutoConfiguration {
 
     @Bean
     public GenericRpcInvoker genericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer,
-                                               ExecutorService rpcBusinessExecutor) {
-        return new GenericRpcInvoker(registry, serializer, rpcBusinessExecutor);
+                                               ExecutorService rpcBusinessExecutor, RpcMetrics rpcMetrics) {
+        return new GenericRpcInvoker(registry, serializer, businessExecutorWithMetrics(rpcBusinessExecutor, rpcMetrics), rpcMetrics);
+    }
+
+    private ExecutorService businessExecutorWithMetrics(ExecutorService executor, RpcMetrics metrics) {
+        return executor;
     }
 
     @Bean
@@ -81,10 +84,21 @@ public class RpcAutoConfiguration {
     public LoadBalancer loadBalancer() { return new RoundRobinLoadBalancer(); }
 
     @Bean
+    @ConditionalOnMissingBean(MeterRegistry.class)
+    public MeterRegistry rpcMeterRegistry() { return new SimpleMeterRegistry(); }
+
+    @Bean
+    @ConditionalOnMissingBean(RpcMetrics.class)
+    public RpcMetrics rpcMetrics(MeterRegistry meterRegistry) { return new RpcMetrics(meterRegistry); }
+
+    @Bean
     public static RpcReferenceBeanPostProcessor rpcReferenceBeanPostProcessor(
             RpcProperties properties, ObjectProvider<RpcChannelManager> channelManagerProvider,
-            ObjectProvider<RpcCodec> serializerProvider) {
-        return new RpcReferenceBeanPostProcessor(properties, channelManagerProvider, serializerProvider);
+            ObjectProvider<RpcCodec> serializerProvider, ObjectProvider<ServiceRegistry> registryProvider,
+            ObjectProvider<LoadBalancer> loadBalancerProvider, ObjectProvider<RpcMetrics> metricsProvider,
+            ObjectProvider<ExecutorService> asyncExecutorProvider) {
+        return new RpcReferenceBeanPostProcessor(properties, channelManagerProvider, serializerProvider,
+                registryProvider, loadBalancerProvider, metricsProvider, asyncExecutorProvider);
     }
 
     @Bean
