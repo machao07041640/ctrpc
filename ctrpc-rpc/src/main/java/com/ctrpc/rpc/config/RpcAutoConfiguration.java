@@ -44,36 +44,30 @@ public class RpcAutoConfiguration {
     @Bean
     public static RpcServiceRegistry rpcServiceRegistry() { return new RpcServiceRegistry(); }
 
-    @Bean(destroyMethod = "shutdown")
+    @Bean(name = "rpcBusinessExecutor", destroyMethod = "shutdown")
     public ExecutorService rpcBusinessExecutor(RpcProperties properties) {
         RpcProperties.Server cfg = properties.getServer();
         validateExecutorConfig(cfg);
         return new ThreadPoolExecutor(
-                cfg.getExecutorCoreThreads(),
-                cfg.getExecutorMaxThreads(),
-                cfg.getExecutorKeepAliveSeconds(),
-                TimeUnit.SECONDS,
+                cfg.getExecutorCoreThreads(), cfg.getExecutorMaxThreads(),
+                cfg.getExecutorKeepAliveSeconds(), TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(cfg.getExecutorQueueCapacity()),
-                new RpcBusinessThreadFactory(),
-                new ThreadPoolExecutor.AbortPolicy());
+                new RpcBusinessThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
     }
 
-    @Bean(destroyMethod = "shutdown")
-    public ExecutorService rpcAsyncExecutor(RpcProperties properties) {
+    @Bean(name = "rpcAsyncExecutor", destroyMethod = "shutdown")
+    public ExecutorService rpcAsyncExecutor() {
         int threads = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
         return new ThreadPoolExecutor(
-                threads,
-                threads,
-                0L,
-                TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(1000),
-                new RpcAsyncThreadFactory(),
+                threads, threads, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1000), new RpcAsyncThreadFactory(),
                 new ThreadPoolExecutor.CallerRunsPolicy());
     }
 
     @Bean
     public GenericRpcInvoker genericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer,
-                                               ExecutorService rpcBusinessExecutor, RpcMetrics rpcMetrics) {
+                                               @Qualifier("rpcBusinessExecutor") ExecutorService rpcBusinessExecutor,
+                                               RpcMetrics rpcMetrics) {
         return new GenericRpcInvoker(registry, serializer, rpcBusinessExecutor, rpcMetrics);
     }
 
