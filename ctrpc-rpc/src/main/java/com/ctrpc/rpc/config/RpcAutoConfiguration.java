@@ -60,11 +60,7 @@ public class RpcAutoConfiguration {
     @Bean
     public GenericRpcInvoker genericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer,
                                                ExecutorService rpcBusinessExecutor, RpcMetrics rpcMetrics) {
-        return new GenericRpcInvoker(registry, serializer, businessExecutorWithMetrics(rpcBusinessExecutor, rpcMetrics), rpcMetrics);
-    }
-
-    private ExecutorService businessExecutorWithMetrics(ExecutorService executor, RpcMetrics metrics) {
-        return executor;
+        return new GenericRpcInvoker(registry, serializer, rpcBusinessExecutor, rpcMetrics);
     }
 
     @Bean
