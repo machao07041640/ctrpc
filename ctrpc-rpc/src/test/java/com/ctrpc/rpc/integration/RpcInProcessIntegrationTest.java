@@ -7,11 +7,10 @@ import com.ctrpc.rpc.metrics.RpcMetrics;
 import com.ctrpc.rpc.serialize.Fastjson2RpcCodec;
 import com.ctrpc.rpc.server.GenericRpcInvoker;
 import com.ctrpc.rpc.server.RpcServiceRegistry;
-import com.google.common.util.concurrent.MoreExecutors;
 import io.grpc.ManagedChannel;
+import io.grpc.Server;
 import io.grpc.inprocess.InProcessChannelBuilder;
 import io.grpc.inprocess.InProcessServerBuilder;
-import io.grpc.Server;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,11 +26,11 @@ class RpcInProcessIntegrationTest {
     private ManagedChannel channel;
     private ExecutorService executor;
 
-    interface GreetingService {
+    public interface GreetingService {
         String hello(String name);
     }
 
-    static class GreetingServiceImpl implements GreetingService {
+    public static class GreetingServiceImpl implements GreetingService {
         @Override public String hello(String name) { return "hello " + name; }
     }
 
@@ -41,15 +40,14 @@ class RpcInProcessIntegrationTest {
         RpcServiceRegistry registry = new RpcServiceRegistry();
         registry.register(GreetingService.class, new GreetingServiceImpl());
         executor = Executors.newFixedThreadPool(2);
-        GenericRpcInvoker invoker = new GenericRpcInvoker(
-                registry, new Fastjson2RpcCodec(), executor,
+        GenericRpcInvoker invoker = new GenericRpcInvoker(registry, new Fastjson2RpcCodec(), executor,
                 new RpcMetrics(new SimpleMeterRegistry()));
         server = InProcessServerBuilder.forName(serverName).directExecutor().addService(invoker).build().start();
         channel = InProcessChannelBuilder.forName(serverName).directExecutor().build();
     }
 
     @AfterEach
-    void tearDown() throws Exception {
+    void tearDown() {
         if (channel != null) channel.shutdownNow();
         if (server != null) server.shutdownNow();
         if (executor != null) executor.shutdownNow();
