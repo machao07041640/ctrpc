@@ -11,7 +11,6 @@ import com.ctrpc.rpc.serialize.RpcCodec;
 import com.ctrpc.rpc.registry.ServiceMeta;
 import com.ctrpc.rpc.registry.ServiceRegistry;
 import com.ctrpc.rpc.loadbalance.LoadBalancer;
-import com.ctrpc.rpc.governance.RetryExecutor;
 import com.ctrpc.rpc.governance.CircuitBreaker;
 import com.ctrpc.rpc.metrics.RpcMetrics;
 import com.google.common.util.concurrent.Futures;
@@ -104,7 +103,11 @@ public class RpcInvocationHandler implements InvocationHandler {
         boolean success = false;
         try {
             InvokeRequest request = buildRequest(method, args, traceId);
-            InvokeResponse response = circuitBreaker.execute(() -> RetryExecutor.execute(() -> invokeOnce(request, deadline), 2));
+            ServiceMeta target = selectTarget();
+            CtrpcInvokerGrpc.CtrpcInvokerBlockingStub stub = CtrpcInvokerGrpc
+                    .newBlockingStub(channelManager.getChannel(serviceName, target.getAddress()))
+                    .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS);
+            InvokeResponse response = circuitBreaker.execute(() -> stub.invoke(request));
             if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
             Object result = serializer.decodeResult(response.getDataJson(), method);
             success = true;
@@ -124,13 +127,6 @@ public class RpcInvocationHandler implements InvocationHandler {
             metrics.recordClient(sample, serviceName, method.getName(), success);
             restoreTrace(previousTraceId);
         }
-    }
-
-    private InvokeResponse invokeOnce(InvokeRequest request, long deadline) throws Exception {
-        ServiceMeta target = selectTarget();
-        return CtrpcInvokerGrpc.newBlockingStub(channelManager.getChannel(serviceName, target.getAddress()))
-                .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS)
-                .invoke(request);
     }
 
     private CompletableFuture<Object> invokeAsync(Method method, Object[] args) {
