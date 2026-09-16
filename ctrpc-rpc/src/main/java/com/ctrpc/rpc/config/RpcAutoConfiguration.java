@@ -17,6 +17,7 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -57,6 +58,19 @@ public class RpcAutoConfiguration {
                 new ThreadPoolExecutor.AbortPolicy());
     }
 
+    @Bean(destroyMethod = "shutdown")
+    public ExecutorService rpcAsyncExecutor(RpcProperties properties) {
+        int threads = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
+        return new ThreadPoolExecutor(
+                threads,
+                threads,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1000),
+                new RpcAsyncThreadFactory(),
+                new ThreadPoolExecutor.CallerRunsPolicy());
+    }
+
     @Bean
     public GenericRpcInvoker genericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer,
                                                ExecutorService rpcBusinessExecutor, RpcMetrics rpcMetrics) {
@@ -92,9 +106,9 @@ public class RpcAutoConfiguration {
             RpcProperties properties, ObjectProvider<RpcChannelManager> channelManagerProvider,
             ObjectProvider<RpcCodec> serializerProvider, ObjectProvider<ServiceRegistry> registryProvider,
             ObjectProvider<LoadBalancer> loadBalancerProvider, ObjectProvider<RpcMetrics> metricsProvider,
-            ObjectProvider<ExecutorService> asyncExecutorProvider) {
+            @Qualifier("rpcAsyncExecutor") ExecutorService asyncExecutor) {
         return new RpcReferenceBeanPostProcessor(properties, channelManagerProvider, serializerProvider,
-                registryProvider, loadBalancerProvider, metricsProvider, asyncExecutorProvider);
+                registryProvider, loadBalancerProvider, metricsProvider, asyncExecutor);
     }
 
     @Bean
@@ -111,6 +125,15 @@ public class RpcAutoConfiguration {
         private final AtomicInteger index = new AtomicInteger(1);
         @Override public Thread newThread(Runnable runnable) {
             Thread thread = new Thread(runnable, "ctrpc-business-" + index.getAndIncrement());
+            thread.setDaemon(false);
+            return thread;
+        }
+    }
+
+    private static final class RpcAsyncThreadFactory implements ThreadFactory {
+        private final AtomicInteger index = new AtomicInteger(1);
+        @Override public Thread newThread(Runnable runnable) {
+            Thread thread = new Thread(runnable, "ctrpc-async-" + index.getAndIncrement());
             thread.setDaemon(false);
             return thread;
         }
