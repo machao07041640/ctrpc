@@ -14,11 +14,15 @@ import java.util.Map;
 public class RpcProperties {
     private Server server = new Server();
     private Client client = new Client();
+    private Registry registry = new Registry();
     private Map<String, ServiceDependency> dependencies = new LinkedHashMap<>();
 
     @Data
     public static class Server {
         private int port = 9090;
+        private String serviceName;
+        private String ip;
+        private boolean registerEnabled = false;
         private int bossThreads = 1;
         private int workerThreads = 0;
         private int maxInboundMessageSize = 4 * 1024 * 1024;
@@ -27,6 +31,11 @@ public class RpcProperties {
         private int executorMaxThreads = 64;
         private int executorQueueCapacity = 1000;
         private long executorKeepAliveSeconds = 60;
+        private boolean tlsEnabled = false;
+        private String tlsCertChainFile;
+        private String tlsPrivateKeyFile;
+        private boolean requireClientAuth = false;
+        private String tlsTrustCertCollectionFile;
     }
 
     @Data
@@ -35,6 +44,22 @@ public class RpcProperties {
         private boolean keepAlive = true;
         private Duration keepAliveTime = Duration.ofSeconds(30);
         private int maxInboundMessageSize = 4 * 1024 * 1024;
+        private boolean tlsEnabled = false;
+        private String tlsTrustCertCollectionFile;
+        private String tlsClientCertChainFile;
+        private String tlsClientPrivateKeyFile;
+    }
+
+    @Data
+    public static class Registry {
+        private String type = "static";
+        private String serverAddr = "127.0.0.1:8848";
+        private String namespace = "public";
+        private String group = "DEFAULT_GROUP";
+        private String cluster = "DEFAULT";
+        private String username;
+        private String password;
+        private long discoveryCacheTtlMs = 3000;
     }
 
     @Data
