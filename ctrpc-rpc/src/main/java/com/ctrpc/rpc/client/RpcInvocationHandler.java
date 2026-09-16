@@ -147,23 +147,18 @@ public class RpcInvocationHandler implements InvocationHandler {
             failed.completeExceptionally(e);
             return failed;
         }
-        long deadline = resolveTimeoutMs();
+
+        CircuitBreaker breaker = breakerFor(target);
         try {
-            circuitBreakers.computeIfAbsent(target.getAddress(), key -> new CircuitBreaker());
-            CircuitBreaker breaker = breakerFor(target);
-            if (!breaker.tryAcquireForAsync()) {
-                metrics.recordClient(sample, serviceName, method.getName(), false);
-                CompletableFuture<Object> failed = new CompletableFuture<>();
-                failed.completeExceptionally(new IllegalStateException("circuit open"));
-                return failed;
-            }
+            breaker.tryAcquireForAsync();
         } catch (Exception e) {
             metrics.recordClient(sample, serviceName, method.getName(), false);
             CompletableFuture<Object> failed = new CompletableFuture<>();
             failed.completeExceptionally(e);
             return failed;
         }
-        CircuitBreaker breaker = breakerFor(target);
+
+        long deadline = resolveTimeoutMs();
         ListenableFuture<InvokeResponse> grpcFuture = CtrpcInvokerGrpc
                 .newFutureStub(channelManager.getChannel(serviceName, target.getAddress()))
                 .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS)
@@ -171,17 +166,17 @@ public class RpcInvocationHandler implements InvocationHandler {
         CompletableFuture<Object> result = new CompletableFuture<>();
         Futures.addCallback(grpcFuture, new com.google.common.util.concurrent.FutureCallback<InvokeResponse>() {
             @Override public void onSuccess(InvokeResponse response) {
+                breaker.onAsyncSuccess();
                 try {
-                    breaker.onAsyncSuccess();
                     if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
                     result.complete(serializer.decodeResult(response.getDataJson(), method));
                     metrics.recordClient(sample, serviceName, method.getName(), true);
                 } catch (Throwable t) {
-                    breaker.onAsyncFailure();
                     result.completeExceptionally(t);
                     metrics.recordClient(sample, serviceName, method.getName(), false);
                 } finally { restoreTrace(previousTraceId); }
             }
+
             @Override public void onFailure(Throwable t) {
                 breaker.onAsyncFailure();
                 Throwable cause = t instanceof StatusRuntimeException
