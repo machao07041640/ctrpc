@@ -27,6 +27,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.event.EventListener;
+import org.springframework.core.annotation.Order;
 
 import java.net.InetAddress;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -41,31 +42,23 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class RpcAutoConfiguration {
     private static final Logger log = LoggerFactory.getLogger(RpcAutoConfiguration.class);
 
-    @Bean
-    @ConditionalOnMissingBean(RpcCodec.class)
+    @Bean @ConditionalOnMissingBean(RpcCodec.class)
     public RpcCodec rpcCodec() { return new Fastjson2RpcCodec(); }
 
-    @Bean
-    public static RpcServiceRegistry rpcServiceRegistry() { return new RpcServiceRegistry(); }
+    @Bean public static RpcServiceRegistry rpcServiceRegistry() { return new RpcServiceRegistry(); }
 
     @Bean(name = "rpcBusinessExecutor", destroyMethod = "shutdown")
     public ExecutorService rpcBusinessExecutor(RpcProperties properties) {
-        RpcProperties.Server cfg = properties.getServer();
-        validateExecutorConfig(cfg);
-        return new ThreadPoolExecutor(
-                cfg.getExecutorCoreThreads(), cfg.getExecutorMaxThreads(),
-                cfg.getExecutorKeepAliveSeconds(), TimeUnit.SECONDS,
-                new ArrayBlockingQueue<>(cfg.getExecutorQueueCapacity()),
-                new RpcBusinessThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
+        RpcProperties.Server cfg = properties.getServer(); validateExecutorConfig(cfg);
+        return new ThreadPoolExecutor(cfg.getExecutorCoreThreads(), cfg.getExecutorMaxThreads(), cfg.getExecutorKeepAliveSeconds(), TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(cfg.getExecutorQueueCapacity()), new RpcBusinessThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
     }
 
     @Bean(name = "rpcAsyncExecutor", destroyMethod = "shutdown")
     public ExecutorService rpcAsyncExecutor() {
         int threads = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
-        return new ThreadPoolExecutor(
-                threads, threads, 0L, TimeUnit.MILLISECONDS,
-                new ArrayBlockingQueue<>(1000), new RpcAsyncThreadFactory(),
-                new ThreadPoolExecutor.CallerRunsPolicy());
+        return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1000),
+                new RpcAsyncThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
     }
 
     @Bean
@@ -75,43 +68,29 @@ public class RpcAutoConfiguration {
         return new GenericRpcInvoker(registry, serializer, rpcBusinessExecutor, rpcMetrics);
     }
 
-    @Bean
-    public RpcServerBootstrap rpcServerBootstrap(RpcProperties properties, GenericRpcInvoker invoker) {
-        return new RpcServerBootstrap(properties, invoker);
-    }
-
-    @Bean
-    public RpcChannelManager rpcChannelManager(RpcProperties properties) { return new RpcChannelManager(properties); }
+    @Bean public RpcServerBootstrap rpcServerBootstrap(RpcProperties properties, GenericRpcInvoker invoker) { return new RpcServerBootstrap(properties, invoker); }
+    @Bean public RpcChannelManager rpcChannelManager(RpcProperties properties) { return new RpcChannelManager(properties); }
 
     @Bean
     @ConditionalOnProperty(prefix = "ctrpc.rpc.registry", name = "type", havingValue = "nacos")
     @ConditionalOnClass(NacosServiceRegistry.class)
-    public ServiceRegistry nacosServiceRegistry(RpcProperties properties) {
-        return new NacosServiceRegistry(properties.getRegistry());
-    }
+    public ServiceRegistry nacosServiceRegistry(RpcProperties properties) { return new NacosServiceRegistry(properties.getRegistry()); }
 
-    @Bean
-    @ConditionalOnMissingBean(ServiceRegistry.class)
+    @Bean @ConditionalOnMissingBean(ServiceRegistry.class)
     public ServiceRegistry serviceRegistry(RpcProperties properties) { return new StaticServiceRegistry(properties); }
 
     @Bean
     @ConditionalOnProperty(prefix = "ctrpc.rpc.registry", name = "type", havingValue = "nacos")
     @ConditionalOnClass(NacosServiceRegistry.class)
-    public NacosProviderRegistrar nacosProviderRegistrar(RpcProperties properties,
-                                                         ObjectProvider<ServiceRegistry> registryProvider) {
+    public NacosProviderRegistrar nacosProviderRegistrar(RpcProperties properties, ObjectProvider<ServiceRegistry> registryProvider) {
         return new NacosProviderRegistrar(properties, registryProvider);
     }
 
-    @Bean
-    @ConditionalOnMissingBean(LoadBalancer.class)
+    @Bean @ConditionalOnMissingBean(LoadBalancer.class)
     public LoadBalancer loadBalancer() { return new RoundRobinLoadBalancer(); }
-
-    @Bean
-    @ConditionalOnMissingBean(MeterRegistry.class)
+    @Bean @ConditionalOnMissingBean(MeterRegistry.class)
     public MeterRegistry rpcMeterRegistry() { return new SimpleMeterRegistry(); }
-
-    @Bean
-    @ConditionalOnMissingBean(RpcMetrics.class)
+    @Bean @ConditionalOnMissingBean(RpcMetrics.class)
     public RpcMetrics rpcMetrics(MeterRegistry meterRegistry) { return new RpcMetrics(meterRegistry); }
 
     @Bean
@@ -124,8 +103,7 @@ public class RpcAutoConfiguration {
                 registryProvider, loadBalancerProvider, metricsProvider, asyncExecutor);
     }
 
-    @Bean
-    public RpcDependencyLogger rpcDependencyLogger(RpcProperties properties) { return new RpcDependencyLogger(properties); }
+    @Bean public RpcDependencyLogger rpcDependencyLogger(RpcProperties properties) { return new RpcDependencyLogger(properties); }
 
     private static void validateExecutorConfig(RpcProperties.Server cfg) {
         if (cfg.getExecutorCoreThreads() <= 0 || cfg.getExecutorMaxThreads() < cfg.getExecutorCoreThreads()
@@ -136,32 +114,17 @@ public class RpcAutoConfiguration {
 
     private static final class RpcBusinessThreadFactory implements ThreadFactory {
         private final AtomicInteger index = new AtomicInteger(1);
-        @Override public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "ctrpc-business-" + index.getAndIncrement());
-            thread.setDaemon(false);
-            return thread;
-        }
+        @Override public Thread newThread(Runnable runnable) { Thread thread = new Thread(runnable, "ctrpc-business-" + index.getAndIncrement()); thread.setDaemon(false); return thread; }
     }
-
     private static final class RpcAsyncThreadFactory implements ThreadFactory {
         private final AtomicInteger index = new AtomicInteger(1);
-        @Override public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable, "ctrpc-async-" + index.getAndIncrement());
-            thread.setDaemon(false);
-            return thread;
-        }
+        @Override public Thread newThread(Runnable runnable) { Thread thread = new Thread(runnable, "ctrpc-async-" + index.getAndIncrement()); thread.setDaemon(false); return thread; }
     }
 
     public static class NacosProviderRegistrar {
-        private final RpcProperties properties;
-        private final ObjectProvider<ServiceRegistry> registryProvider;
-
-        public NacosProviderRegistrar(RpcProperties properties, ObjectProvider<ServiceRegistry> registryProvider) {
-            this.properties = properties;
-            this.registryProvider = registryProvider;
-        }
-
-        @EventListener(ApplicationReadyEvent.class)
+        private final RpcProperties properties; private final ObjectProvider<ServiceRegistry> registryProvider;
+        public NacosProviderRegistrar(RpcProperties properties, ObjectProvider<ServiceRegistry> registryProvider) { this.properties = properties; this.registryProvider = registryProvider; }
+        @EventListener(ApplicationReadyEvent.class) @Order(1)
         public void register() {
             RpcProperties.Server server = properties.getServer();
             if (!server.isRegisterEnabled() || server.getServiceName() == null || server.getServiceName().trim().isEmpty()) return;
@@ -169,11 +132,8 @@ public class RpcAutoConfiguration {
             if (!(registry instanceof NacosServiceRegistry)) return;
             String ip = server.getIp();
             if (ip == null || ip.trim().isEmpty()) {
-                try {
-                    ip = InetAddress.getLocalHost().getHostAddress();
-                } catch (Exception e) {
-                    throw new IllegalStateException("Cannot resolve RPC server IP; configure ctrpc.rpc.server.ip", e);
-                }
+                try { ip = InetAddress.getLocalHost().getHostAddress(); }
+                catch (Exception e) { throw new IllegalStateException("Cannot resolve RPC server IP; configure ctrpc.rpc.server.ip", e); }
             }
             ((NacosServiceRegistry) registry).register(server.getServiceName(), ip, server.getPort());
         }
@@ -184,12 +144,8 @@ public class RpcAutoConfiguration {
         public RpcDependencyLogger(RpcProperties properties) { this.properties = properties; }
         @EventListener(ApplicationReadyEvent.class)
         public void logDependencies() {
-            if (properties.getDependencies().isEmpty()) {
-                log.info("No RPC service dependencies configured (ctrpc.rpc.dependencies)");
-                return;
-            }
-            properties.getDependencies().forEach((name, dep) ->
-                    log.info("RPC dependency: service={} address={} interfaces={}", name, dep.getAddress(), dep.getInterfaces()));
+            if (properties.getDependencies().isEmpty()) { log.info("No RPC service dependencies configured (ctrpc.rpc.dependencies)"); return; }
+            properties.getDependencies().forEach((name, dep) -> log.info("RPC dependency: service={} address={} interfaces={}", name, dep.getAddress(), dep.getInterfaces()));
         }
     }
 }
