@@ -27,7 +27,6 @@ public class RpcChannelManager {
         this.properties = properties;
     }
 
-    /** 兼容静态配置：serviceName -> configured address。 */
     public ManagedChannel getChannel(String serviceName) {
         RpcProperties.ServiceDependency dep = properties.getDependencies().get(serviceName);
         if (dep == null || !StringUtils.hasText(dep.getAddress())) {
@@ -36,7 +35,6 @@ public class RpcChannelManager {
         return getChannel(serviceName, dep.getAddress());
     }
 
-    /** 按具体实例地址缓存连接，供 Registry + LoadBalancer 使用。 */
     public ManagedChannel getChannel(String serviceName, String address) {
         if (!StringUtils.hasText(address)) {
             throw new IllegalArgumentException("RPC target address must not be empty");
@@ -75,7 +73,7 @@ public class RpcChannelManager {
     }
 
     private io.grpc.netty.shaded.io.netty.handler.ssl.SslContext buildClientSslContext() throws Exception {
-        io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts.ClientSslContextBuilder builder = GrpcSslContexts.forClient();
+        io.grpc.netty.shaded.io.netty.handler.ssl.SslContextBuilder builder = GrpcSslContexts.forClient();
         RpcProperties.Client client = properties.getClient();
         if (StringUtils.hasText(client.getTlsTrustCertCollectionFile())) {
             builder.trustManager(new File(client.getTlsTrustCertCollectionFile()));
@@ -86,15 +84,10 @@ public class RpcChannelManager {
         return builder.build();
     }
 
-    /** 支持 static://host:port、dns:///host:port 或 host:port。 */
     static String normalizeAddress(String address) {
         String value = address.trim();
-        if (value.startsWith("static://")) {
-            return value.substring("static://".length());
-        }
-        if (value.startsWith("dns:///")) {
-            return value.substring("dns:///".length());
-        }
+        if (value.startsWith("static://")) return value.substring("static://".length());
+        if (value.startsWith("dns:///")) return value.substring("dns:///".length());
         return value;
     }
 
@@ -103,9 +96,7 @@ public class RpcChannelManager {
         channels.forEach((name, channel) -> {
             try {
                 channel.shutdown();
-                if (!channel.awaitTermination(3, TimeUnit.SECONDS)) {
-                    channel.shutdownNow();
-                }
+                if (!channel.awaitTermination(3, TimeUnit.SECONDS)) channel.shutdownNow();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 channel.shutdownNow();
