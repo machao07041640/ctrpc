@@ -2,11 +2,15 @@ package com.ctrpc.rpc.client;
 
 import com.ctrpc.rpc.annotation.RpcReference;
 import com.ctrpc.rpc.config.RpcProperties;
+import com.ctrpc.rpc.loadbalance.LoadBalancer;
+import com.ctrpc.rpc.metrics.RpcMetrics;
+import com.ctrpc.rpc.registry.ServiceRegistry;
 import com.ctrpc.rpc.serialize.RpcCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.util.StringUtils;
@@ -14,6 +18,7 @@ import org.springframework.util.StringUtils;
 import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 /** 扫描 @RpcReference 字段，按配置注入远程 iface 代理。 */
 public class RpcReferenceBeanPostProcessor implements BeanPostProcessor {
@@ -21,13 +26,25 @@ public class RpcReferenceBeanPostProcessor implements BeanPostProcessor {
     private final RpcProperties properties;
     private final ObjectProvider<RpcChannelManager> channelManagerProvider;
     private final ObjectProvider<RpcCodec> serializerProvider;
+    private final ObjectProvider<ServiceRegistry> registryProvider;
+    private final ObjectProvider<LoadBalancer> loadBalancerProvider;
+    private final ObjectProvider<RpcMetrics> metricsProvider;
+    private final Executor asyncExecutor;
 
     public RpcReferenceBeanPostProcessor(RpcProperties properties,
                                          ObjectProvider<RpcChannelManager> channelManagerProvider,
-                                         ObjectProvider<RpcCodec> serializerProvider) {
+                                         ObjectProvider<RpcCodec> serializerProvider,
+                                         ObjectProvider<ServiceRegistry> registryProvider,
+                                         ObjectProvider<LoadBalancer> loadBalancerProvider,
+                                         ObjectProvider<RpcMetrics> metricsProvider,
+                                         @Qualifier("rpcAsyncExecutor") Executor asyncExecutor) {
         this.properties = properties;
         this.channelManagerProvider = channelManagerProvider;
         this.serializerProvider = serializerProvider;
+        this.registryProvider = registryProvider;
+        this.loadBalancerProvider = loadBalancerProvider;
+        this.metricsProvider = metricsProvider;
+        this.asyncExecutor = asyncExecutor;
     }
 
     @Override
@@ -45,7 +62,9 @@ public class RpcReferenceBeanPostProcessor implements BeanPostProcessor {
         String serviceName = resolveServiceName(iface, reference);
         Object proxy = Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[]{iface},
                 new RpcInvocationHandler(serviceName, iface, reference.timeoutMs(),
-                        channelManagerProvider.getObject(), serializerProvider.getObject(), properties));
+                        channelManagerProvider.getObject(), serializerProvider.getObject(), properties,
+                        registryProvider.getIfAvailable(), loadBalancerProvider.getIfAvailable(),
+                        metricsProvider.getObject(), asyncExecutor));
         ReflectionUtils.makeAccessible(field);
         ReflectionUtils.setField(field, bean, proxy);
         log.info("RPC reference injected: field={}.{} -> service={} iface={}",
