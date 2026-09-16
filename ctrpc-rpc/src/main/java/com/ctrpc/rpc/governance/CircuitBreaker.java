@@ -41,6 +41,31 @@ public class CircuitBreaker {
         }
     }
 
+    /** Acquire a permit for an asynchronous RPC. */
+    public boolean tryAcquireForAsync() {
+        return !tryAcquire() || markAsyncProbeIfNeeded();
+    }
+
+    /** Record that an asynchronous transport call completed successfully. */
+    public void onAsyncSuccess() {
+        synchronized (this) {
+            consecutiveFailures.set(0);
+            openUntilMs = 0;
+            halfOpenProbeInFlight = false;
+        }
+    }
+
+    /** Record that an asynchronous transport call failed. */
+    public void onAsyncFailure() {
+        synchronized (this) {
+            halfOpenProbeInFlight = false;
+            if (consecutiveFailures.incrementAndGet() >= failureThreshold || openUntilMs > 0) {
+                openUntilMs = System.currentTimeMillis() + openDurationMs;
+                consecutiveFailures.set(0);
+            }
+        }
+    }
+
     private synchronized boolean tryAcquire() {
         long now = System.currentTimeMillis();
         if (openUntilMs == 0) return false;
@@ -53,6 +78,10 @@ public class CircuitBreaker {
             throw new IllegalStateException("circuit half-open");
         }
         halfOpenProbeInFlight = true;
+        return true;
+    }
+
+    private synchronized boolean markAsyncProbeIfNeeded() {
         return true;
     }
 
