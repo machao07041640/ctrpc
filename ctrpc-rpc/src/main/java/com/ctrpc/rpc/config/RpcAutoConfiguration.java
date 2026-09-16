@@ -4,6 +4,7 @@ import com.ctrpc.rpc.client.RpcChannelManager;
 import com.ctrpc.rpc.client.RpcReferenceBeanPostProcessor;
 import com.ctrpc.rpc.metrics.RpcMetrics;
 import com.ctrpc.rpc.serialize.Fastjson2RpcCodec;
+import com.ctrpc.rpc.registry.NacosServiceRegistry;
 import com.ctrpc.rpc.registry.ServiceRegistry;
 import com.ctrpc.rpc.registry.StaticServiceRegistry;
 import com.ctrpc.rpc.loadbalance.LoadBalancer;
@@ -19,12 +20,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.event.EventListener;
 
+import java.net.InetAddress;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ThreadFactory;
@@ -80,8 +84,23 @@ public class RpcAutoConfiguration {
     public RpcChannelManager rpcChannelManager(RpcProperties properties) { return new RpcChannelManager(properties); }
 
     @Bean
+    @ConditionalOnProperty(prefix = "ctrpc.rpc.registry", name = "type", havingValue = "nacos")
+    @ConditionalOnClass(NacosServiceRegistry.class)
+    public ServiceRegistry nacosServiceRegistry(RpcProperties properties) {
+        return new NacosServiceRegistry(properties.getRegistry());
+    }
+
+    @Bean
     @ConditionalOnMissingBean(ServiceRegistry.class)
     public ServiceRegistry serviceRegistry(RpcProperties properties) { return new StaticServiceRegistry(properties); }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "ctrpc.rpc.registry", name = "type", havingValue = "nacos")
+    @ConditionalOnClass(NacosServiceRegistry.class)
+    public NacosProviderRegistrar nacosProviderRegistrar(RpcProperties properties,
+                                                         ObjectProvider<ServiceRegistry> registryProvider) {
+        return new NacosProviderRegistrar(properties, registryProvider);
+    }
 
     @Bean
     @ConditionalOnMissingBean(LoadBalancer.class)
@@ -130,6 +149,33 @@ public class RpcAutoConfiguration {
             Thread thread = new Thread(runnable, "ctrpc-async-" + index.getAndIncrement());
             thread.setDaemon(false);
             return thread;
+        }
+    }
+
+    public static class NacosProviderRegistrar {
+        private final RpcProperties properties;
+        private final ObjectProvider<ServiceRegistry> registryProvider;
+
+        public NacosProviderRegistrar(RpcProperties properties, ObjectProvider<ServiceRegistry> registryProvider) {
+            this.properties = properties;
+            this.registryProvider = registryProvider;
+        }
+
+        @EventListener(ApplicationReadyEvent.class)
+        public void register() {
+            RpcProperties.Server server = properties.getServer();
+            if (!server.isRegisterEnabled() || server.getServiceName() == null || server.getServiceName().trim().isEmpty()) return;
+            ServiceRegistry registry = registryProvider.getIfAvailable();
+            if (!(registry instanceof NacosServiceRegistry)) return;
+            String ip = server.getIp();
+            if (ip == null || ip.trim().isEmpty()) {
+                try {
+                    ip = InetAddress.getLocalHost().getHostAddress();
+                } catch (Exception e) {
+                    throw new IllegalStateException("Cannot resolve RPC server IP; configure ctrpc.rpc.server.ip", e);
+                }
+            }
+            ((NacosServiceRegistry) registry).register(server.getServiceName(), ip, server.getPort());
         }
     }
 
