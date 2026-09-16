@@ -44,7 +44,6 @@ public class RpcAutoConfiguration {
 
     @Bean @ConditionalOnMissingBean(RpcCodec.class)
     public RpcCodec rpcCodec() { return new Fastjson2RpcCodec(); }
-
     @Bean public static RpcServiceRegistry rpcServiceRegistry() { return new RpcServiceRegistry(); }
 
     @Bean(name = "rpcBusinessExecutor", destroyMethod = "shutdown")
@@ -53,21 +52,18 @@ public class RpcAutoConfiguration {
         return new ThreadPoolExecutor(cfg.getExecutorCoreThreads(), cfg.getExecutorMaxThreads(), cfg.getExecutorKeepAliveSeconds(), TimeUnit.SECONDS,
                 new ArrayBlockingQueue<>(cfg.getExecutorQueueCapacity()), new RpcBusinessThreadFactory(), new ThreadPoolExecutor.AbortPolicy());
     }
-
     @Bean(name = "rpcAsyncExecutor", destroyMethod = "shutdown")
     public ExecutorService rpcAsyncExecutor() {
         int threads = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
         return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1000),
                 new RpcAsyncThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
     }
-
     @Bean
     public GenericRpcInvoker genericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer,
                                                @Qualifier("rpcBusinessExecutor") ExecutorService rpcBusinessExecutor,
                                                RpcMetrics rpcMetrics) {
         return new GenericRpcInvoker(registry, serializer, rpcBusinessExecutor, rpcMetrics);
     }
-
     @Bean public RpcServerBootstrap rpcServerBootstrap(RpcProperties properties, GenericRpcInvoker invoker) { return new RpcServerBootstrap(properties, invoker); }
     @Bean public RpcChannelManager rpcChannelManager(RpcProperties properties) { return new RpcChannelManager(properties); }
 
@@ -76,7 +72,8 @@ public class RpcAutoConfiguration {
     @ConditionalOnClass(NacosServiceRegistry.class)
     public ServiceRegistry nacosServiceRegistry(RpcProperties properties) { return new NacosServiceRegistry(properties.getRegistry()); }
 
-    @Bean @ConditionalOnMissingBean(ServiceRegistry.class)
+    @Bean
+    @ConditionalOnProperty(prefix = "ctrpc.rpc.registry", name = "type", havingValue = "static", matchIfMissing = true)
     public ServiceRegistry serviceRegistry(RpcProperties properties) { return new StaticServiceRegistry(properties); }
 
     @Bean
@@ -102,16 +99,12 @@ public class RpcAutoConfiguration {
         return new RpcReferenceBeanPostProcessor(properties, channelManagerProvider, serializerProvider,
                 registryProvider, loadBalancerProvider, metricsProvider, asyncExecutor);
     }
-
     @Bean public RpcDependencyLogger rpcDependencyLogger(RpcProperties properties) { return new RpcDependencyLogger(properties); }
 
     private static void validateExecutorConfig(RpcProperties.Server cfg) {
         if (cfg.getExecutorCoreThreads() <= 0 || cfg.getExecutorMaxThreads() < cfg.getExecutorCoreThreads()
-                || cfg.getExecutorQueueCapacity() <= 0 || cfg.getExecutorKeepAliveSeconds() < 0) {
-            throw new IllegalArgumentException("Invalid ctrpc.rpc.server executor configuration");
-        }
+                || cfg.getExecutorQueueCapacity() <= 0 || cfg.getExecutorKeepAliveSeconds() < 0) throw new IllegalArgumentException("Invalid ctrpc.rpc.server executor configuration");
     }
-
     private static final class RpcBusinessThreadFactory implements ThreadFactory {
         private final AtomicInteger index = new AtomicInteger(1);
         @Override public Thread newThread(Runnable runnable) { Thread thread = new Thread(runnable, "ctrpc-business-" + index.getAndIncrement()); thread.setDaemon(false); return thread; }
@@ -138,7 +131,6 @@ public class RpcAutoConfiguration {
             ((NacosServiceRegistry) registry).register(server.getServiceName(), ip, server.getPort());
         }
     }
-
     public static class RpcDependencyLogger {
         private final RpcProperties properties;
         public RpcDependencyLogger(RpcProperties properties) { this.properties = properties; }
