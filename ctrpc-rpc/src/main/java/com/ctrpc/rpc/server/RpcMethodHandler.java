@@ -5,6 +5,8 @@ import java.util.Objects;
 
 /**
  * 已注册的 RPC 方法处理器。
+ *
+ * <p>方法在服务注册阶段预编译为 MethodHandle，避免请求路径重复执行反射调用。</p>
  */
 public final class RpcMethodHandler {
 
@@ -12,6 +14,7 @@ public final class RpcMethodHandler {
     private final Object bean;
     private final Method method;
     private final Class<?>[] parameterTypes;
+    private final MethodInvoker invoker;
 
     public RpcMethodHandler(String interfaceName, Object bean, Method method) {
         this.interfaceName = interfaceName;
@@ -19,6 +22,7 @@ public final class RpcMethodHandler {
         this.method = method;
         this.parameterTypes = method.getParameterTypes();
         this.method.setAccessible(true);
+        this.invoker = new MethodInvoker(bean, method);
     }
 
     public String getInterfaceName() {
@@ -38,7 +42,7 @@ public final class RpcMethodHandler {
     }
 
     public Object invoke(Object[] args) throws Exception {
-        return method.invoke(bean, args);
+        return invoker.invoke(args);
     }
 
     public String methodKey() {

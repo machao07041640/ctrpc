@@ -31,7 +31,7 @@
         <dependency>
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>
-            <version>2.1.1</version> <!-- 对于 Spring Boot 3.3.x，2.1.1 是匹配版本 -->
+            <version>2.1.1</version>
         </dependency>
         <dependency>
             <groupId>io.grpc</groupId>
@@ -45,6 +45,10 @@
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
         </dependency>
 
         <dependency>

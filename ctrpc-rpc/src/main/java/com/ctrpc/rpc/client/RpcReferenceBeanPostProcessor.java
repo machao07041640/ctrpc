@@ -2,11 +2,16 @@ package com.ctrpc.rpc.client;
 
 import com.ctrpc.rpc.annotation.RpcReference;
 import com.ctrpc.rpc.config.RpcProperties;
+import com.ctrpc.rpc.loadbalance.LoadBalancer;
+import com.ctrpc.rpc.metrics.RpcMetrics;
+import com.ctrpc.rpc.registry.ServiceRegistry;
 import com.ctrpc.rpc.serialize.RpcCodec;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.util.ReflectionUtils;
 import org.springframework.util.StringUtils;
@@ -14,6 +19,7 @@ import org.springframework.util.StringUtils;
 import java.lang.reflect.Field;
 import java.lang.reflect.Proxy;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 /** 扫描 @RpcReference 字段，按配置注入远程 iface 代理。 */
 public class RpcReferenceBeanPostProcessor implements BeanPostProcessor {
@@ -21,13 +27,38 @@ public class RpcReferenceBeanPostProcessor implements BeanPostProcessor {
     private final RpcProperties properties;
     private final ObjectProvider<RpcChannelManager> channelManagerProvider;
     private final ObjectProvider<RpcCodec> serializerProvider;
+    private final ObjectProvider<ServiceRegistry> registryProvider;
+    private final ObjectProvider<LoadBalancer> loadBalancerProvider;
+    private final ObjectProvider<RpcMetrics> metricsProvider;
+    private final Executor asyncExecutor;
 
+    public RpcReferenceBeanPostProcessor(RpcProperties properties,
+                                         ObjectProvider<RpcChannelManager> channelManagerProvider,
+                                         ObjectProvider<RpcCodec> serializerProvider,
+                                         ObjectProvider<ServiceRegistry> registryProvider,
+                                         ObjectProvider<LoadBalancer> loadBalancerProvider,
+                                         ObjectProvider<RpcMetrics> metricsProvider,
+                                         @Qualifier("rpcAsyncExecutor") Executor asyncExecutor) {
+        this.properties = properties;
+        this.channelManagerProvider = channelManagerProvider;
+        this.serializerProvider = serializerProvider;
+        this.registryProvider = registryProvider;
+        this.loadBalancerProvider = loadBalancerProvider;
+        this.metricsProvider = metricsProvider;
+        this.asyncExecutor = asyncExecutor;
+    }
+
+    /** Backward-compatible constructor for applications creating the processor directly. */
     public RpcReferenceBeanPostProcessor(RpcProperties properties,
                                          ObjectProvider<RpcChannelManager> channelManagerProvider,
                                          ObjectProvider<RpcCodec> serializerProvider) {
         this.properties = properties;
         this.channelManagerProvider = channelManagerProvider;
         this.serializerProvider = serializerProvider;
+        this.registryProvider = null;
+        this.loadBalancerProvider = null;
+        this.metricsProvider = null;
+        this.asyncExecutor = Runnable::run;
     }
 
     @Override
@@ -43,9 +74,14 @@ public class RpcReferenceBeanPostProcessor implements BeanPostProcessor {
         Class<?> iface = field.getType();
         if (!iface.isInterface()) throw new IllegalStateException("@RpcReference field must be an interface: " + field);
         String serviceName = resolveServiceName(iface, reference);
+        ServiceRegistry registry = registryProvider == null ? null : registryProvider.getIfAvailable();
+        LoadBalancer loadBalancer = loadBalancerProvider == null ? null : loadBalancerProvider.getIfAvailable();
+        RpcMetrics metrics = metricsProvider == null
+                ? new RpcMetrics(new SimpleMeterRegistry()) : metricsProvider.getObject();
         Object proxy = Proxy.newProxyInstance(iface.getClassLoader(), new Class<?>[]{iface},
                 new RpcInvocationHandler(serviceName, iface, reference.timeoutMs(),
-                        channelManagerProvider.getObject(), serializerProvider.getObject(), properties));
+                        channelManagerProvider.getObject(), serializerProvider.getObject(), properties,
+                        registry, loadBalancer, metrics, asyncExecutor));
         ReflectionUtils.makeAccessible(field);
         ReflectionUtils.setField(field, bean, proxy);
         log.info("RPC reference injected: field={}.{} -> service={} iface={}",

@@ -12,9 +12,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
-/**
- * 按服务名复用 ManagedChannel，支撑高 QPS 长连接调用。
- */
+/** 按服务实例复用 ManagedChannel，支撑多节点高 QPS 长连接调用。 */
 public class RpcChannelManager {
 
     private static final Logger log = LoggerFactory.getLogger(RpcChannelManager.class);
@@ -26,17 +24,26 @@ public class RpcChannelManager {
         this.properties = properties;
     }
 
+    /** 兼容静态配置：serviceName -> configured address。 */
     public ManagedChannel getChannel(String serviceName) {
-        return channels.computeIfAbsent(serviceName, this::createChannel);
+        RpcProperties.ServiceDependency dep = properties.getDependencies().get(serviceName);
+        if (dep == null || !StringUtils.hasText(dep.getAddress())) {
+            throw new IllegalStateException("No RPC dependency address for service: " + serviceName);
+        }
+        return getChannel(serviceName, dep.getAddress());
     }
 
-    private ManagedChannel createChannel(String serviceName) {
-        RpcProperties.ServiceDependency dep = properties.getDependencies().get(serviceName);
-        if (dep == null || dep.getAddress() == null || StringUtils.isEmpty(dep.getAddress())) {
-            throw new IllegalStateException("No RPC dependency address for service: " + serviceName
-                    + ". Please configure ctrpc.rpc.dependencies." + serviceName + ".address");
+    /** 按具体实例地址缓存连接，供 Registry + LoadBalancer 使用。 */
+    public ManagedChannel getChannel(String serviceName, String address) {
+        if (!StringUtils.hasText(address)) {
+            throw new IllegalArgumentException("RPC target address must not be empty");
         }
-        String target = normalizeAddress(dep.getAddress());
+        String target = normalizeAddress(address);
+        String key = serviceName + "@" + target;
+        return channels.computeIfAbsent(key, ignored -> createChannel(serviceName, target));
+    }
+
+    private ManagedChannel createChannel(String serviceName, String target) {
         ManagedChannelBuilder<?> builder = ManagedChannelBuilder.forTarget(target)
                 .usePlaintext()
                 .maxInboundMessageSize(properties.getClient().getMaxInboundMessageSize());
@@ -52,9 +59,7 @@ public class RpcChannelManager {
         return channel;
     }
 
-    /**
-     * 支持 static://host:port 或 host:port
-     */
+    /** 支持 static://host:port、dns:///host:port 或 host:port。 */
     static String normalizeAddress(String address) {
         String value = address.trim();
         if (value.startsWith("static://")) {
@@ -75,7 +80,7 @@ public class RpcChannelManager {
                 Thread.currentThread().interrupt();
                 channel.shutdownNow();
             }
-            log.info("RPC channel closed: service={}", name);
+            log.info("RPC channel closed: key={}", name);
         });
         channels.clear();
     }
