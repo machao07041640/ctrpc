@@ -87,10 +87,7 @@ public class RpcInvocationHandler implements InvocationHandler {
                 default: throw new UnsupportedOperationException(method.getName());
             }
         }
-
-        if (CompletableFuture.class.isAssignableFrom(method.getReturnType())) {
-            return invokeAsync(method, args);
-        }
+        if (CompletableFuture.class.isAssignableFrom(method.getReturnType())) return invokeAsync(method, args);
         return invokeSync(method, args);
     }
 
@@ -103,17 +100,11 @@ public class RpcInvocationHandler implements InvocationHandler {
             traceId = UUID.randomUUID().toString().replace("-", "");
             MDC.put("traceId", traceId);
         }
-
         long deadline = resolveTimeoutMs();
         boolean success = false;
         try {
             InvokeRequest request = buildRequest(method, args, traceId);
-            ServiceMeta target = selectTarget();
-            CtrpcInvokerGrpc.CtrpcInvokerBlockingStub stub = CtrpcInvokerGrpc
-                    .newBlockingStub(channelManager.getChannel(serviceName, target.getAddress()))
-                    .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS);
-            InvokeResponse response = circuitBreaker.execute(() ->
-                    RetryExecutor.execute(() -> stub.invoke(request), 2));
+            InvokeResponse response = circuitBreaker.execute(() -> RetryExecutor.execute(() -> invokeOnce(request, deadline), 2));
             if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
             Object result = serializer.decodeResult(response.getDataJson(), method);
             success = true;
@@ -124,27 +115,29 @@ public class RpcInvocationHandler implements InvocationHandler {
             throw e;
         } catch (StatusRuntimeException e) {
             Status.Code code = e.getStatus().getCode();
-            log.warn("RPC transport failed service={} iface={} method={} status={}",
-                    serviceName, interfaceClass.getName(), method.getName(), code, e);
+            log.warn("RPC transport failed service={} iface={} method={} status={}", serviceName, interfaceClass.getName(), method.getName(), code);
             throw new RpcTransportException(code, "RPC transport failed: " + code, e);
         } catch (Exception e) {
-            log.error("RPC client failed service={} iface={} method={}",
-                    serviceName, interfaceClass.getName(), method.getName(), e);
+            log.error("RPC client failed service={} iface={} method={}", serviceName, interfaceClass.getName(), method.getName(), e);
             throw new RpcTransportException(Status.Code.UNKNOWN, "RPC call failed", e);
         } finally {
             metrics.recordClient(sample, serviceName, method.getName(), success);
-            if (previousTraceId == null) MDC.remove("traceId");
-            else MDC.put("traceId", previousTraceId);
+            restoreTrace(previousTraceId);
         }
+    }
+
+    private InvokeResponse invokeOnce(InvokeRequest request, long deadline) throws Exception {
+        ServiceMeta target = selectTarget();
+        return CtrpcInvokerGrpc.newBlockingStub(channelManager.getChannel(serviceName, target.getAddress()))
+                .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS)
+                .invoke(request);
     }
 
     private CompletableFuture<Object> invokeAsync(Method method, Object[] args) {
         Timer.Sample sample = metrics.start();
         String previousTraceId = MDC.get("traceId");
         String traceId = previousTraceId;
-        if (!StringUtils.hasText(traceId)) {
-            traceId = UUID.randomUUID().toString().replace("-", "");
-        }
+        if (!StringUtils.hasText(traceId)) traceId = UUID.randomUUID().toString().replace("-", "");
         InvokeRequest request = buildRequest(method, args, traceId);
         ServiceMeta target;
         try {
@@ -155,7 +148,6 @@ public class RpcInvocationHandler implements InvocationHandler {
             failed.completeExceptionally(e);
             return failed;
         }
-
         long deadline = resolveTimeoutMs();
         ListenableFuture<InvokeResponse> grpcFuture = CtrpcInvokerGrpc
                 .newFutureStub(channelManager.getChannel(serviceName, target.getAddress()))
@@ -163,27 +155,19 @@ public class RpcInvocationHandler implements InvocationHandler {
                 .invoke(request);
         CompletableFuture<Object> result = new CompletableFuture<>();
         Futures.addCallback(grpcFuture, new com.google.common.util.concurrent.FutureCallback<InvokeResponse>() {
-            @Override
-            public void onSuccess(InvokeResponse response) {
+            @Override public void onSuccess(InvokeResponse response) {
                 try {
-                    if (response.getCode() != 0) {
-                        throw new RpcException(response.getCode(), response.getMessage());
-                    }
+                    if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
                     result.complete(serializer.decodeResult(response.getDataJson(), method));
                     metrics.recordClient(sample, serviceName, method.getName(), true);
                 } catch (Throwable t) {
                     result.completeExceptionally(t);
                     metrics.recordClient(sample, serviceName, method.getName(), false);
-                } finally {
-                    restoreTrace(previousTraceId);
-                }
+                } finally { restoreTrace(previousTraceId); }
             }
-
-            @Override
-            public void onFailure(Throwable t) {
+            @Override public void onFailure(Throwable t) {
                 Throwable cause = t instanceof StatusRuntimeException
-                        ? new RpcTransportException(((StatusRuntimeException) t).getStatus().getCode(), "RPC transport failed", t)
-                        : t;
+                        ? new RpcTransportException(((StatusRuntimeException) t).getStatus().getCode(), "RPC transport failed", t) : t;
                 result.completeExceptionally(cause);
                 metrics.recordClient(sample, serviceName, method.getName(), false);
                 restoreTrace(previousTraceId);
@@ -194,31 +178,20 @@ public class RpcInvocationHandler implements InvocationHandler {
 
     private InvokeRequest buildRequest(Method method, Object[] args, String traceId) {
         String parameterTypes = Fastjson2RpcCodec.parameterTypesKey(method.getParameterTypes());
-        return InvokeRequest.newBuilder()
-                .setInterfaceName(interfaceClass.getName())
-                .setMethodName(method.getName())
-                .setParameterTypes(parameterTypes)
-                .setArgsJson(serializer.encodeArgs(args))
-                .setTraceId(traceId)
-                .build();
+        return InvokeRequest.newBuilder().setInterfaceName(interfaceClass.getName()).setMethodName(method.getName())
+                .setParameterTypes(parameterTypes).setArgsJson(serializer.encodeArgs(args)).setTraceId(traceId).build();
     }
 
     private ServiceMeta selectTarget() {
         if (registry == null || loadBalancer == null) {
             RpcProperties.ServiceDependency dep = properties.getDependencies().get(serviceName);
-            if (dep == null || !StringUtils.hasText(dep.getAddress())) {
-                throw new IllegalStateException("No RPC dependency address for service: " + serviceName);
-            }
+            if (dep == null || !StringUtils.hasText(dep.getAddress())) throw new IllegalStateException("No RPC dependency address for service: " + serviceName);
             return new ServiceMeta(serviceName, dep.getAddress());
         }
         List<ServiceMeta> instances = registry.discover(serviceName);
-        if (instances == null || instances.isEmpty()) {
-            throw new IllegalStateException("No available RPC instances for service: " + serviceName);
-        }
+        if (instances == null || instances.isEmpty()) throw new IllegalStateException("No available RPC instances for service: " + serviceName);
         ServiceMeta target = loadBalancer.select(instances);
-        if (target == null || !StringUtils.hasText(target.getAddress())) {
-            throw new IllegalStateException("Load balancer returned an invalid RPC instance for service: " + serviceName);
-        }
+        if (target == null || !StringUtils.hasText(target.getAddress())) throw new IllegalStateException("Load balancer returned an invalid RPC instance for service: " + serviceName);
         return target;
     }
 
