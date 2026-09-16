@@ -28,6 +28,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
@@ -44,7 +45,7 @@ public class RpcInvocationHandler implements InvocationHandler {
     private final LoadBalancer loadBalancer;
     private final RpcMetrics metrics;
     private final Executor asyncExecutor;
-    private final CircuitBreaker circuitBreaker = new CircuitBreaker();
+    private final ConcurrentHashMap<String, CircuitBreaker> circuitBreakers = new ConcurrentHashMap<>();
 
     public RpcInvocationHandler(String serviceName, Class<?> interfaceClass, long timeoutMs,
                                 RpcChannelManager channelManager, RpcCodec serializer, RpcProperties properties,
@@ -104,15 +105,17 @@ public class RpcInvocationHandler implements InvocationHandler {
         try {
             InvokeRequest request = buildRequest(method, args, traceId);
             ServiceMeta target = selectTarget();
-            CtrpcInvokerGrpc.CtrpcInvokerBlockingStub stub = CtrpcInvokerGrpc
+            CircuitBreaker breaker = breakerFor(target);
+            InvokeResponse response = breaker.execute(() -> CtrpcInvokerGrpc
                     .newBlockingStub(channelManager.getChannel(serviceName, target.getAddress()))
-                    .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS);
-            InvokeResponse response = circuitBreaker.execute(() -> stub.invoke(request));
+                    .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS)
+                    .invoke(request));
             if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
             Object result = serializer.decodeResult(response.getDataJson(), method);
             success = true;
-            log.info("RPC client ok service={} iface={} method={} elapsedMs={}",
-                    serviceName, interfaceClass.getSimpleName(), method.getName(), System.currentTimeMillis() - start);
+            log.info("RPC client ok service={} iface={} method={} target={} elapsedMs={}",
+                    serviceName, interfaceClass.getSimpleName(), method.getName(), target.getAddress(),
+                    System.currentTimeMillis() - start);
             return result;
         } catch (RpcException e) {
             throw e;
@@ -145,6 +148,22 @@ public class RpcInvocationHandler implements InvocationHandler {
             return failed;
         }
         long deadline = resolveTimeoutMs();
+        try {
+            circuitBreakers.computeIfAbsent(target.getAddress(), key -> new CircuitBreaker());
+            CircuitBreaker breaker = breakerFor(target);
+            if (!breaker.tryAcquireForAsync()) {
+                metrics.recordClient(sample, serviceName, method.getName(), false);
+                CompletableFuture<Object> failed = new CompletableFuture<>();
+                failed.completeExceptionally(new IllegalStateException("circuit open"));
+                return failed;
+            }
+        } catch (Exception e) {
+            metrics.recordClient(sample, serviceName, method.getName(), false);
+            CompletableFuture<Object> failed = new CompletableFuture<>();
+            failed.completeExceptionally(e);
+            return failed;
+        }
+        CircuitBreaker breaker = breakerFor(target);
         ListenableFuture<InvokeResponse> grpcFuture = CtrpcInvokerGrpc
                 .newFutureStub(channelManager.getChannel(serviceName, target.getAddress()))
                 .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS)
@@ -153,15 +172,18 @@ public class RpcInvocationHandler implements InvocationHandler {
         Futures.addCallback(grpcFuture, new com.google.common.util.concurrent.FutureCallback<InvokeResponse>() {
             @Override public void onSuccess(InvokeResponse response) {
                 try {
+                    breaker.onAsyncSuccess();
                     if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
                     result.complete(serializer.decodeResult(response.getDataJson(), method));
                     metrics.recordClient(sample, serviceName, method.getName(), true);
                 } catch (Throwable t) {
+                    breaker.onAsyncFailure();
                     result.completeExceptionally(t);
                     metrics.recordClient(sample, serviceName, method.getName(), false);
                 } finally { restoreTrace(previousTraceId); }
             }
             @Override public void onFailure(Throwable t) {
+                breaker.onAsyncFailure();
                 Throwable cause = t instanceof StatusRuntimeException
                         ? new RpcTransportException(((StatusRuntimeException) t).getStatus().getCode(), "RPC transport failed", t) : t;
                 result.completeExceptionally(cause);
@@ -189,6 +211,10 @@ public class RpcInvocationHandler implements InvocationHandler {
         ServiceMeta target = loadBalancer.select(instances);
         if (target == null || !StringUtils.hasText(target.getAddress())) throw new IllegalStateException("Load balancer returned an invalid RPC instance for service: " + serviceName);
         return target;
+    }
+
+    private CircuitBreaker breakerFor(ServiceMeta target) {
+        return circuitBreakers.computeIfAbsent(target.getAddress(), key -> new CircuitBreaker());
     }
 
     private long resolveTimeoutMs() {
