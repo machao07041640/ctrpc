@@ -2,6 +2,7 @@ package com.ctrpc.rpc.config;
 
 import com.ctrpc.rpc.client.RpcChannelManager;
 import com.ctrpc.rpc.client.RpcReferenceBeanPostProcessor;
+import com.ctrpc.rpc.exception.RpcExceptionResolver;
 import com.ctrpc.rpc.metrics.RpcMetrics;
 import com.ctrpc.rpc.serialize.Fastjson2RpcCodec;
 import com.ctrpc.rpc.registry.NacosServiceRegistry;
@@ -59,10 +60,18 @@ public class RpcAutoConfiguration {
                 new RpcAsyncThreadFactory(), new ThreadPoolExecutor.CallerRunsPolicy());
     }
     @Bean
-    public GenericRpcInvoker genericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer,
-                                               @Qualifier("rpcBusinessExecutor") ExecutorService rpcBusinessExecutor,
-                                               RpcMetrics rpcMetrics) {
-        return new GenericRpcInvoker(registry, serializer, rpcBusinessExecutor, rpcMetrics);
+    public GenericRpcInvoker genericRpcInvoker(
+            RpcServiceRegistry registry,
+            RpcCodec serializer,
+            @Qualifier("rpcBusinessExecutor") ExecutorService rpcBusinessExecutor,
+            RpcMetrics rpcMetrics,
+            ObjectProvider<RpcExceptionResolver> exceptionResolvers) {
+        return new GenericRpcInvoker(
+                registry,
+                serializer,
+                rpcBusinessExecutor,
+                rpcMetrics,
+                exceptionResolvers.orderedStream().collect(java.util.stream.Collectors.toList()));
     }
     @Bean public RpcServerBootstrap rpcServerBootstrap(RpcProperties properties, GenericRpcInvoker invoker) { return new RpcServerBootstrap(properties, invoker); }
     @Bean public RpcChannelManager rpcChannelManager(RpcProperties properties) { return new RpcChannelManager(properties); }
