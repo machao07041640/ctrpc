@@ -27,9 +27,15 @@ message InvokeRequest {
 }
 
 message InvokeResponse {
-  // 0=成功
+  // 0=成功；非0保留给显式 RpcException 等框架/应用错误码
   int32 code = 1;
   string message = 2;
   // 返回值 JSON；void 时为空
   string data_json = 3;
+
+  // Provider 方法抛出的远端异常信息。
+  string exception_class = 4;
+  string exception_message = 5;
+  string exception_stack_trace = 6;
+  bool exception_declared = 7;
 }
