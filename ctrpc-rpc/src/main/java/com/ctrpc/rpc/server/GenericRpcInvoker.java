@@ -3,7 +3,9 @@ package com.ctrpc.rpc.server;
 import com.ctrpc.proto.invoke.CtrpcInvokerGrpc;
 import com.ctrpc.proto.invoke.InvokeRequest;
 import com.ctrpc.proto.invoke.InvokeResponse;
+import com.ctrpc.rpc.exception.RpcError;
 import com.ctrpc.rpc.exception.RpcException;
+import com.ctrpc.rpc.exception.RpcExceptionResolver;
 import com.ctrpc.rpc.metrics.RpcMetrics;
 import com.ctrpc.rpc.serialize.RpcCodec;
 import io.grpc.Status;
@@ -14,6 +16,8 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.util.StringUtils;
 
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
@@ -24,13 +28,20 @@ public class GenericRpcInvoker extends CtrpcInvokerGrpc.CtrpcInvokerImplBase {
     private final RpcCodec serializer;
     private final Executor businessExecutor;
     private final RpcMetrics metrics;
+    private final List<RpcExceptionResolver> exceptionResolvers;
 
-    public GenericRpcInvoker(RpcServiceRegistry registry, RpcCodec serializer,
-                             Executor businessExecutor, RpcMetrics metrics) {
+    public GenericRpcInvoker(
+            RpcServiceRegistry registry,
+            RpcCodec serializer,
+            Executor businessExecutor,
+            RpcMetrics metrics,
+            List<RpcExceptionResolver> exceptionResolvers) {
         this.registry = registry;
         this.serializer = serializer;
         this.businessExecutor = businessExecutor;
         this.metrics = metrics;
+        this.exceptionResolvers =
+                exceptionResolvers == null ? Collections.emptyList() : exceptionResolvers;
     }
 
     @Override
@@ -77,16 +88,50 @@ public class GenericRpcInvoker extends CtrpcInvokerGrpc.CtrpcInvokerImplBase {
             responseObserver.onCompleted();
         } catch (Exception e) {
             Throwable cause = e.getCause() != null ? e.getCause() : e;
-            log.error("RPC invoke failed iface={} method={}", rpcIface, rpcMethod, cause);
-            responseObserver.onError(Status.INTERNAL
-                    .withDescription("RPC invocation failed")
-                    .withCause(cause)
-                    .asRuntimeException());
+            RpcError resolved = resolveException(cause);
+            if (resolved != null) {
+                log.warn(
+                        "RPC invoke resolved business error iface={} method={} code={} msg={}",
+                        rpcIface,
+                        rpcMethod,
+                        resolved.getCode(),
+                        resolved.getMessage());
+                responseObserver.onNext(
+                        InvokeResponse.newBuilder()
+                                .setCode(resolved.getCode())
+                                .setMessage(resolved.getMessage())
+                                .build());
+                responseObserver.onCompleted();
+            } else {
+                log.error("RPC invoke failed iface={} method={}", rpcIface, rpcMethod, cause);
+                responseObserver.onError(
+                        Status.INTERNAL
+                                .withDescription("RPC invocation failed")
+                                .withCause(cause)
+                                .asRuntimeException());
+            }
         } finally {
             metrics.recordServer(sample, rpcIface, rpcMethod, success);
             MDC.remove("traceId");
             MDC.remove("rpcIface");
             MDC.remove("rpcMethod");
         }
+    }
+
+    private RpcError resolveException(Throwable throwable) {
+        for (RpcExceptionResolver resolver : exceptionResolvers) {
+            try {
+                RpcError error = resolver.resolve(throwable);
+                if (error != null) {
+                    return error;
+                }
+            } catch (Exception resolverException) {
+                log.error(
+                        "RPC exception resolver failed resolver={}",
+                        resolver.getClass().getName(),
+                        resolverException);
+            }
+        }
+        return null;
     }
 }
