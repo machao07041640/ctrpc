@@ -4,6 +4,7 @@ import com.ctrpc.proto.invoke.CtrpcInvokerGrpc;
 import com.ctrpc.proto.invoke.InvokeRequest;
 import com.ctrpc.proto.invoke.InvokeResponse;
 import com.ctrpc.rpc.config.RpcProperties;
+import com.ctrpc.rpc.exception.RemoteRpcException;
 import com.ctrpc.rpc.exception.RpcException;
 import com.ctrpc.rpc.exception.RpcTransportException;
 import com.ctrpc.rpc.serialize.Fastjson2RpcCodec;
@@ -110,7 +111,9 @@ public class RpcInvocationHandler implements InvocationHandler {
                     .newBlockingStub(channelManager.getChannel(serviceName, target.getAddress()))
                     .withDeadlineAfter(deadline, TimeUnit.MILLISECONDS)
                     .invoke(request));
-            if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
+            if (response.getCode() != 0) {
+                throw toRemoteException(response);
+            }
             Object result = serializer.decodeResult(response.getDataJson(), method);
             success = true;
             log.info("RPC client ok service={} iface={} method={} target={} elapsedMs={}",
@@ -168,7 +171,9 @@ public class RpcInvocationHandler implements InvocationHandler {
             @Override public void onSuccess(InvokeResponse response) {
                 breaker.onAsyncSuccess();
                 try {
-                    if (response.getCode() != 0) throw new RpcException(response.getCode(), response.getMessage());
+                    if (response.getCode() != 0) {
+                        throw toRemoteException(response);
+                    }
                     result.complete(serializer.decodeResult(response.getDataJson(), method));
                     metrics.recordClient(sample, serviceName, method.getName(), true);
                 } catch (Throwable t) {
@@ -187,6 +192,18 @@ public class RpcInvocationHandler implements InvocationHandler {
             }
         }, asyncExecutor);
         return result;
+    }
+
+    private RuntimeException toRemoteException(InvokeResponse response) {
+        if (StringUtils.hasText(response.getExceptionClass())) {
+            return new RemoteRpcException(
+                    response.getCode(),
+                    response.getExceptionClass(),
+                    response.getExceptionMessage(),
+                    response.getExceptionStackTrace(),
+                    response.getExceptionDeclared());
+        }
+        return new RpcException(response.getCode(), response.getMessage());
     }
 
     private InvokeRequest buildRequest(Method method, Object[] args, String traceId) {
